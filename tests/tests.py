@@ -124,7 +124,7 @@ class TestCredlyMarkdownGeneration(TestCase):
         self.maxDiff = None
 
     def test_markdown_format_without_links(self):
-        """Test that markdown is generated without href links (new format)"""
+        """Badges without an href render as a sized HTML image"""
         test_badges = [
             {
                 'title': 'Test Badge',
@@ -133,12 +133,13 @@ class TestCredlyMarkdownGeneration(TestCase):
                 'issue_date': '22/11/20'
             }
         ]
-        
+
         credly = Credly()
         markdown = credly.generate_md_format(test_badges)
-        
-        # Should generate markdown without href links
-        expected = '![Test Badge](https://images.credly.com/size/110x110/test.png "Test Badge")'
+
+        # HTML width/height pin the display size even if Credly serves
+        # a full-size image for the URL.
+        expected = '<img src="https://images.credly.com/size/110x110/test.png" alt="Test Badge" width="80" height="80" />'
         self.assertEqual(markdown, expected)
 
     def test_markdown_with_multiple_badges(self):
@@ -160,8 +161,9 @@ class TestCredlyMarkdownGeneration(TestCase):
         
         credly = Credly()
         markdown = credly.generate_md_format(test_badges)
-        
-        expected = '![First Badge](https://images.credly.com/size/110x110/first.png "First Badge")\n![Second Badge](https://images.credly.com/size/110x110/second.png "Second Badge")'
+
+        # Single line: one HTML badge per line renders vertically on GitHub
+        expected = '<img src="https://images.credly.com/size/110x110/first.png" alt="First Badge" width="80" height="80" /> <img src="https://images.credly.com/size/110x110/second.png" alt="Second Badge" width="80" height="80" />'
         self.assertEqual(markdown, expected)
 
     def test_markdown_with_no_badges(self):
@@ -175,8 +177,8 @@ class TestCredlyMarkdownGeneration(TestCase):
         test_badges = [None, {'title': 'Valid Badge', 'img': 'test.png', 'issuer': 'IBM'}]
         credly = Credly()
         markdown = credly.generate_md_format(test_badges)
-        
-        expected = '![Valid Badge](test.png "Valid Badge")'
+
+        expected = '<img src="test.png" alt="Valid Badge" width="80" height="80" />'
         self.assertEqual(markdown, expected)
 
 
@@ -385,6 +387,51 @@ class TestCredlyErrorHandling(TestCase):
             # This is acceptable behavior for malformed HTML
             # The test passes if it doesn't crash, regardless of the result
             self.assertTrue(True)  # Just ensure no exception was raised
+
+
+class TestCredlyMultiAccount(TestCase):
+    """Tests for reading several Credly accounts and merging them"""
+
+    def test_users_list_and_legacy_user(self):
+        credly = Credly(usernames=["personal", "work", "personal"])
+        self.assertEqual(credly.USERS, ["personal", "work"])
+        self.assertEqual(credly.USER, "personal")
+
+    def test_parse_credly_users_setting(self):
+        from settings import _parse_credly_users
+
+        self.assertEqual(
+            _parse_credly_users("u1, u2 u1", "u3"),
+            ["u1", "u2", "u3"],
+        )
+        self.assertEqual(_parse_credly_users(None, None), [])
+
+    def test_merge_dedupes_and_sorts_across_accounts(self):
+        by_user = {
+            "personal": [
+                {'title': 'Old', 'img': 'old.png', 'issuer': 'A',
+                 'issue_date': '01/01/25', 'href': 'https://example.com/old'},
+                {'title': 'Shared', 'img': 'shared.png', 'issuer': 'A',
+                 'issue_date': '01/02/25', 'href': 'https://example.com/shared'},
+            ],
+            "work": [
+                {'title': 'Shared', 'img': 'shared.png', 'issuer': 'A',
+                 'issue_date': '01/02/25', 'href': 'https://example.com/shared'},
+                {'title': 'New', 'img': 'new.png', 'issuer': 'B',
+                 'issue_date': '01/03/25', 'href': 'https://example.com/new'},
+            ],
+        }
+        credly = Credly(usernames=["personal", "work"])
+        with patch.object(Credly, 'return_badges_html',
+                          side_effect=lambda username=None: by_user[username]):
+            with patch.object(Credly, 'convert_to_dict', side_effect=lambda x: x):
+                markdown = credly.get_markdown()
+
+        # Shared badge appears once, newest badge first, all sized 80x80
+        self.assertEqual(markdown.count('alt="Shared"'), 1)
+        self.assertEqual(markdown.count('<a '), 3)
+        self.assertTrue(markdown.startswith('<a href="https://example.com/new">'))
+        self.assertIn('width="80" height="80"', markdown)
 
 
 if __name__ == '__main__':

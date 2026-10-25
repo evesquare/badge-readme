@@ -23,6 +23,10 @@ inputs:
     default: ${{ github.actor }}
     required: false
 
+  CREDLY_USERS:
+    description: "Comma separated Credly user names to merge (e.g. a personal and a work account). Overrides/extends CREDLY_USER"
+    required: false
+
   NUMBER_LAST_BADGES:
     description: "the number of the last badges that need to show - (0 to not set limit)"
     default: "0"

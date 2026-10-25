@@ -123,6 +123,7 @@ That's it! Your badges will appear in your README automatically.
 | `GH_TOKEN` | - | GitHub access token | Yes* |
 | `REPOSITORY` | `username/username` | Target repository | No |
 | `CREDLY_USER` | `username` | Your Credly username | No |
+| `CREDLY_USERS` | - | Comma separated Credly usernames to merge (e.g. a personal and a work account). Badges are de-duplicated and sorted by issue date across accounts. Badges are rendered as HTML images with `width="80" height="80"` so the display size stays fixed even if Credly serves a full-size image | No |
 | `NUMBER_LAST_BADGES` | `0` | Number of badges to show (0 = all) | No |
 | `COMMIT_MESSAGE` | `Updated README with new badges` | Custom commit message | No |
 

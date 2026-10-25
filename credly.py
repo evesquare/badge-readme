@@ -12,18 +12,35 @@ from webdriver_manager.chrome import ChromeDriverManager
 
 from settings import (
     CREDLY_USER,
+    CREDLY_USERS,
     NUMBER_LAST_BADGES,
 )
 
 
 class Credly:
-    def __init__(self, username=None, number_badges=None, f=None):
+    def __init__(self, username=None, usernames=None, number_badges=None, f=None):
         self.FILE = f
         self.BASE_URL = "https://www.credly.com"
-        self.USER = username or CREDLY_USER or "pemtajo"
+        # Several Credly accounts can be read (e.g. a personal account and
+        # a work account). `usernames` / CREDLY_USERS wins, the legacy
+        # single `username` / CREDLY_USER keeps working, and USER remains
+        # the first account for backwards compatibility.
+        if usernames:
+            candidates = list(usernames)
+        elif username:
+            candidates = [username]
+        elif CREDLY_USERS:
+            candidates = list(CREDLY_USERS)
+        else:
+            candidates = [CREDLY_USER or "pemtajo"]
+        self.USERS = []
+        for name in candidates:
+            if name and name not in self.USERS:
+                self.USERS.append(name)
+        self.USER = self.USERS[0]
         self.NUMBER_BADGES = number_badges or NUMBER_LAST_BADGES or 0
 
-        print(f"Credly scraper initialized for user: {self.USER}")
+        print(f"Credly scraper initialized for users: {', '.join(self.USERS)}")
 
     def get_webdriver(self):
         chrome_options = Options()
@@ -61,12 +78,12 @@ class Credly:
                 print(f"Fallback method also failed: {fallback_error}")
                 raise
 
-    def data_from_html(self):
-        if self.FILE:
+    def data_from_html(self, username=None):
+        if self.FILE and (username is None or len(self.USERS) == 1):
             with open(self.FILE, "r") as f:
                 return f.read()
-        
-        url = f"{self.BASE_URL}/users/{self.USER}"
+
+        url = f"{self.BASE_URL}/users/{username or self.USER}"
         print(f"Fetching data from: {url}")
         
         try:
@@ -172,7 +189,11 @@ class Credly:
                     issue_date = date_match.group(1)
         
         img_src = img.get("src", "")
-        img_src = img_src.replace("https://images.credly.com/", "https://images.credly.com/size/80x80/")
+        # Request a small image, but never stack a size prefix onto a URL
+        # that already has one. (Display size is pinned by the width/height
+        # attributes in generate_md_format, not by this URL.)
+        if "images.credly.com/size/" not in img_src:
+            img_src = img_src.replace("https://images.credly.com/", "https://images.credly.com/size/80x80/")
         
         href = ""
         # Try to find the div with role="button" that contains the href
@@ -202,8 +223,8 @@ class Credly:
             "href": href
         }
 
-    def return_badges_html(self):
-        data = self.data_from_html()
+    def return_badges_html(self, username=None):
+        data = self.data_from_html(username=username)
         if not data:
             return []
             
@@ -271,31 +292,55 @@ class Credly:
         print(f"Found {len(badges)} badge elements in HTML")
         return badges
 
+    # Badge image size in the generated README. The HTML width/height
+    # attributes are what actually pin the size: Credly sometimes serves
+    # the full-size image even for a size/80x80 URL, and a plain Markdown
+    # image then renders at full size.
+    BADGE_SIZE = 80
+
     def generate_md_format(self, badges):
         if not badges:
             return None
-        
+
         valid_badges = [badge for badge in badges if badge is not None]
         if not valid_badges:
             return None
-            
-        return "\n".join(
-            map(
-                lambda it: f'[![{it["title"]}]({it["img"]})]({it["href"]})',
-                valid_badges,
+
+        def to_html(it):
+            alt = it["title"].replace('\\"', '"').replace('"', "&quot;")
+            img = (
+                f'<img src="{it["img"]}" alt="{alt}" '
+                f'width="{self.BADGE_SIZE}" height="{self.BADGE_SIZE}" />'
             )
-        )
+            href = it.get("href")
+            return f'<a href="{href}">{img}</a>' if href else img
+
+        # Join on a single line, NOT one badge per line: an HTML badge per
+        # line renders as a vertical stack on GitHub (that is why the
+        # output was switched back to Markdown in a770d1c). A single line
+        # of inline HTML flows and wraps like Markdown images do.
+        return " ".join(map(to_html, valid_badges))
 
     def get_markdown(self):
-        badges_html = self.return_badges_html()
-        
-        if self.NUMBER_BADGES > 0:
-            badges_html = badges_html[:self.NUMBER_BADGES]
-        
         badge_dicts = []
-        for badge in badges_html:
-            badge_dict = self.convert_to_dict(badge)
-            if badge_dict and badge_dict["title"] != "Profile":
+        seen = set()
+        for user in self.USERS:
+            if len(self.USERS) == 1:
+                badges_html = self.return_badges_html()
+            else:
+                badges_html = self.return_badges_html(username=user)
+            for badge in badges_html:
+                badge_dict = self.convert_to_dict(badge)
+                if not badge_dict or badge_dict["title"] == "Profile":
+                    continue
+                # The same badge may appear in more than one account.
+                key = badge_dict.get("href") or (
+                    badge_dict["title"],
+                    badge_dict["img"],
+                )
+                if key in seen:
+                    continue
+                seen.add(key)
                 badge_dicts.append(badge_dict)
         
         def parse_date(date_str):
@@ -313,7 +358,11 @@ class Credly:
             print(f"  {badge['title']}: {badge.get('issue_date', 'No date')}")
         
         badge_dicts.sort(key=lambda x: parse_date(x.get('issue_date', '')) or '1900-01-01', reverse=True)
-        
+
+        # The limit applies to the merged, sorted list across all accounts.
+        if self.NUMBER_BADGES > 0:
+            badge_dicts = badge_dicts[:self.NUMBER_BADGES]
+
         print("\nSorted badges (newest first):")
         for badge in badge_dicts:
             print(f"  {badge['title']}: {badge.get('issue_date', 'No date')}")
